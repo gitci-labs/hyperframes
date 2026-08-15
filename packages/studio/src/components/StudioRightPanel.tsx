@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
+import { useCallback, type MutableRefObject } from "react";
 import { PropertyPanel } from "./editor/PropertyPanel";
 import { LayersPanel } from "./editor/LayersPanel";
 import { CaptionPropertyPanel } from "../captions/components/CaptionPropertyPanel";
@@ -21,18 +21,15 @@ import { usePanelLayoutContext } from "../contexts/PanelLayoutContext";
 import { useFileManagerContext } from "../contexts/FileManagerContext";
 import { useDomEditContext } from "../contexts/DomEditContext";
 import { usePlayerStore } from "../player";
-import { waitForMediaJob } from "./studioMediaJobs";
 import {
   applyColorGradingScopeUpdate,
   EMPTY_COLOR_GRADING_SCOPE_RESULT,
   type ColorGradingScope,
 } from "./studioColorGradingScope";
-import type {
-  AddMediaOverlayHandler,
-  BackgroundRemovalProgress,
-} from "./editor/propertyPanelTypes";
+import type { AddMediaOverlayHandler } from "./editor/propertyPanelTypes";
 import { timelineKeysForSelections, type ToggleHiddenHandler } from "../utils/studioHelpers";
 import { useInspectorSplitResize } from "../hooks/useInspectorSplitResize";
+import { useRemoveBackground } from "../hooks/useRemoveBackground";
 
 export interface StudioRightPanelProps extends StudioEditPersistenceProps {
   designPanelActive: boolean;
@@ -70,6 +67,7 @@ export interface StudioRightPanelProps extends StudioEditPersistenceProps {
     files: Record<string, { before: string; after: string }>;
   }) => Promise<void>;
   onToggleElementHidden?: ToggleHiddenHandler;
+  onAutoGroupCarveSources?: (clipIds: readonly string[], groupId: string) => Promise<void>;
   onAddMediaOverlay?: AddMediaOverlayHandler;
 }
 
@@ -88,6 +86,7 @@ export function StudioRightPanel({
   domEditSaveTimestampRef,
   recordEdit,
   onToggleElementHidden,
+  onAutoGroupCarveSources,
   onAddMediaOverlay,
 }: StudioRightPanelProps) {
   const {
@@ -207,14 +206,6 @@ export function StudioRightPanel({
     handleInspectorSplitResizeMove,
     handleInspectorSplitResizeEnd,
   } = useInspectorSplitResize();
-  const backgroundRemovalAbortRef = useRef<AbortController | null>(null);
-
-  useEffect(
-    () => () => {
-      backgroundRemovalAbortRef.current?.abort();
-    },
-    [],
-  );
 
   const renderJobs = renderQueue.jobs as RenderJob[];
   const inspectorTabActive = rightPanelTab === "design" || rightPanelTab === "layers";
@@ -281,52 +272,7 @@ export function StudioRightPanel({
     ],
   );
 
-  const handleRemoveBackground = useCallback(
-    // fallow-ignore-next-line complexity
-    async (
-      inputPath: string,
-      options: {
-        createBackgroundPlate?: boolean;
-        quality?: "fast" | "balanced" | "best";
-        onProgress?: (progress: BackgroundRemovalProgress) => void;
-      },
-    ) => {
-      const response = await fetch(
-        `/api/projects/${encodeURIComponent(projectId)}/media/remove-background`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            inputPath,
-            createBackgroundPlate: options.createBackgroundPlate === true,
-            quality: options.quality ?? "balanced",
-          }),
-        },
-      );
-      const data = (await response.json().catch(() => ({}))) as {
-        jobId?: string;
-        error?: string;
-      };
-      if (!response.ok || !data.jobId) {
-        throw new Error(data.error || `Background removal failed (${response.status})`);
-      }
-      showToast("Removing background...", "info");
-      backgroundRemovalAbortRef.current?.abort();
-      const controller = new AbortController();
-      backgroundRemovalAbortRef.current = controller;
-      try {
-        const result = await waitForMediaJob(data.jobId, options.onProgress, controller.signal);
-        await refreshFileTree();
-        showToast(`Created transparent asset: ${result.outputPath.split("/").pop()}`, "info");
-        return result;
-      } finally {
-        if (backgroundRemovalAbortRef.current === controller) {
-          backgroundRemovalAbortRef.current = null;
-        }
-      }
-    },
-    [projectId, refreshFileTree, showToast],
-  );
+  const handleRemoveBackground = useRemoveBackground(projectId, refreshFileTree, showToast);
 
   /**
    * A dial being dragged writes to the preview and stops there.
@@ -372,6 +318,7 @@ export function StudioRightPanel({
         copiedAgentPrompt={copiedAgentPrompt}
         onClearSelection={clearDomSelection}
         onToggleElementHidden={onToggleElementHidden}
+        onAutoGroupCarveSources={onAutoGroupCarveSources}
         onUngroup={handleUngroupSelection}
         onSetStyle={handleDomStyleCommit}
         onSetAttribute={handleDomAttributeCommit}

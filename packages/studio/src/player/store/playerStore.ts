@@ -144,7 +144,14 @@ interface PlayerState extends KeyframeSlice, AutomationSelectionSlice, Thumbnail
     updates: Partial<
       Pick<
         TimelineElement,
-        "start" | "duration" | "track" | "zIndex" | "hasExplicitZIndex" | "playbackStart" | "hidden"
+        | "start"
+        | "duration"
+        | "track"
+        | "zIndex"
+        | "hasExplicitZIndex"
+        | "playbackStart"
+        | "hidden"
+        | "audioGroup"
       >
     >,
   ) => void;
