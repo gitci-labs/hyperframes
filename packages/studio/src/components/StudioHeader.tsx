@@ -384,7 +384,7 @@ export function StudioHeader({
         <Tooltip
           label={
             ffmpegMissing
-              ? "FFmpeg is not installed — opens the Renders panel with the install command"
+              ? "FFmpeg is not installed. Opens the Renders panel with the install command."
               : isRendering
                 ? "A render is already in progress"
                 : "Render and export this composition"
