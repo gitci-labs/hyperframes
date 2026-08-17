@@ -107,7 +107,9 @@ describe.skipIf(!HAS_FFMPEG)("processCompositionAudio levels", () => {
 
     expect(result.success).toBe(true);
     expect(meanVolumeDb(outputPath) - meanVolumeDb(sourcePath)).toBeGreaterThan(-0.3);
-  });
+    // Two ffmpeg spawns per case, which routinely outruns the 5 s default on a
+    // Windows runner. Matches the timeout the other ffmpeg-driven engine suites use.
+  }, 180_000);
 
   it("places a delayed track on its authored start, not one AAC frame later", async () => {
     // The mix is AAC-encoded, and AAC encoders emit ~1024 priming samples. A
@@ -160,5 +162,5 @@ describe.skipIf(!HAS_FFMPEG)("processCompositionAudio levels", () => {
 
     expect(result.success).toBe(true);
     expect(firstAudibleSeconds(outputPath)).toBeCloseTo(2, 2);
-  });
+  }, 180_000);
 });
