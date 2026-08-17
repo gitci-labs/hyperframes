@@ -2,6 +2,7 @@ import { swallow } from "./diagnostics";
 import { interpolateVolumeGain, type VolumeKeyframe } from "./mediaVolumeEnvelope.js";
 import { elementVolumeLaneGain } from "./audioAutomationVolume.js";
 import { normalizePlaybackRate } from "./playbackRate.js";
+import { clampAudioGain, clampNativeMediaVolume } from "../audioGain.js";
 
 export function readElementPlaybackRate(el: Element): number {
   const authored = Number.parseFloat(el.getAttribute("data-playback-rate") ?? "");
@@ -162,11 +163,6 @@ function isUnplayable(el: HTMLMediaElement): boolean {
 
 const lastRuntimeAppliedVolume = new WeakMap<HTMLMediaElement, number>();
 
-function clampVolume(volume: number): number {
-  if (!Number.isFinite(volume)) return 1;
-  return Math.max(0, Math.min(1, volume));
-}
-
 /**
  * Drop every per-source sync baseline tracked for `el` — offset drift
  * samples, the seek-past-buffered-range retry latch, and the last
@@ -213,6 +209,8 @@ export function syncRuntimeMedia(params: {
   /**
    * User's volume preference (0–1, set via `onSetVolume`). Multiplied with the
    * per-clip author volume so `data-volume="0.5"` at user volume 0.8 yields 0.4.
+   * Only for the native HTMLMedia path — the Web Audio transport applies it
+   * once on its own master gain (see `applyElementGain`).
    */
   userVolume?: number;
   /**
@@ -221,7 +219,18 @@ export function syncRuntimeMedia(params: {
    * outbound message; further invocations are suppressed by the caller.
    */
   onAutoplayBlocked?: () => void;
-  onElementVolume?: (el: HTMLMediaElement, volume: number) => void;
+  /**
+   * Hand the clip's AUTHOR gain to the Web Audio transport. The user's master
+   * volume is NOT folded in here — the transport applies that once, on its
+   * master gain, so a boosted clip is not attenuated twice.
+   *
+   * Returns true when the transport now carries the full gain in its graph, in
+   * which case `el.volume` must stay at unity or the gain is applied twice
+   * (the element feeds the graph). Returns false when the element is still
+   * played by the native HTMLMedia path, which needs the product written to
+   * `el.volume` — spec-clamped, so above-unity gain is unreachable there.
+   */
+  applyElementGain?: (el: HTMLMediaElement, authorGain: number) => boolean;
   /** Is THIS element owned by the Web Audio transport? Owned → mute it (transport
    *  plays it); not owned → leave audible (HTMLMedia fallback). Per-element, not a
    *  global flag, so a not-yet-claimed track isn't muted by other tracks. */
@@ -265,10 +274,10 @@ export function syncRuntimeMedia(params: {
           relTime = clip.mediaStart + ((relTime - clip.mediaStart) % loopLength);
         }
       }
-      const userVol = clampVolume(params.userVolume ?? 1);
-      const fallbackAuthorVolume = clampVolume(clip.volume ?? 1);
+      const userVol = clampNativeMediaVolume(params.userVolume ?? 1);
+      const fallbackAuthorVolume = clampAudioGain(clip.volume ?? 1);
       const previousRuntimeVolume = lastRuntimeAppliedVolume.get(el);
-      const currentElementVolume = clampVolume(el.volume);
+      const currentElementVolume = clampNativeMediaVolume(el.volume);
 
       let authorVolume: number;
       // An explicit volume lane owns the fader. It is checked before the probed
@@ -284,7 +293,7 @@ export function syncRuntimeMedia(params: {
       // there is one time base, and this is it.
       const laneGain = elementVolumeLaneGain(el, params.timeSeconds - clip.start);
       if (laneGain !== null) {
-        authorVolume = clampVolume(laneGain);
+        authorVolume = clampAudioGain(laneGain);
       } else if (clip.volumeKeyframes && clip.volumeKeyframes.length > 0) {
         // Keyframes probed from the GSAP timeline — same source as the renderer.
         // Use the interpolated envelope value directly; no need to track GSAP changes.
@@ -294,13 +303,13 @@ export function syncRuntimeMedia(params: {
         // and the playback rate — so it only coincides with the envelope's time base
         // for an untrimmed clip playing at 1x from t=0.
         const elapsedInClip = params.timeSeconds - clip.start;
-        authorVolume = clampVolume(interpolateVolumeGain(clip.volumeKeyframes, elapsedInClip));
+        authorVolume = clampAudioGain(interpolateVolumeGain(clip.volumeKeyframes, elapsedInClip));
       } else if (previousRuntimeVolume === undefined) {
         // First tick this clip is active. The transport has already seeked GSAP
         // to the current time (seekTimelineAndAdapters runs before syncRuntimeMedia),
         // so el.volume reflects the animated value — trust it rather than falling
         // back to data-volume, which would clobber the GSAP-seeked position.
-        authorVolume = currentElementVolume;
+        authorVolume = fallbackAuthorVolume > 1 ? fallbackAuthorVolume : currentElementVolume;
       } else if (Math.abs(currentElementVolume - previousRuntimeVolume) > 0.0001) {
         // GSAP (or user code) changed el.volume between ticks — track it.
         authorVolume = currentElementVolume;
@@ -309,10 +318,13 @@ export function syncRuntimeMedia(params: {
         authorVolume = fallbackAuthorVolume;
       }
 
-      const effectiveVolume = clampVolume(authorVolume * userVol);
-      el.volume = effectiveVolume;
-      lastRuntimeAppliedVolume.set(el, effectiveVolume);
-      params.onElementVolume?.(el, effectiveVolume);
+      const authorGain = clampAudioGain(authorVolume);
+      const graphCarriesGain = params.applyElementGain?.(el, authorGain) === true;
+      const nativeVolume = graphCarriesGain
+        ? 1
+        : clampNativeMediaVolume(clampAudioGain(authorGain * userVol));
+      el.volume = nativeVolume;
+      lastRuntimeAppliedVolume.set(el, nativeVolume);
       // Mute only when force-muted or the transport owns this element; an unclaimed
       // track stays audible via the HTMLMedia fallback.
       if (forceMuteAll || params.isWebAudioOwned?.(el)) el.muted = true;

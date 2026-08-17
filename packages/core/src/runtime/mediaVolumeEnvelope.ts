@@ -1,4 +1,5 @@
 import type { RuntimeTimelineLike } from "./types";
+import { clampAudioGain, withUnclampedVolume } from "../audioGain.js";
 
 /**
  * Shared volume-automation utilities used by both the renderer (offline PCM
@@ -16,8 +17,9 @@ export interface VolumeKeyframe {
 
 /**
  * Normalise raw keyframes to track-relative seconds: subtract `trackStart`,
- * clamp to [0,1], sort, de-duplicate, and prepend a `baseVolume` anchor at
- * t=0 when the first keyframe starts after the clip's begin.
+ * clamp to the authoring gain range, sort, de-duplicate, and prepend a
+ * `baseVolume` anchor at t=0 when the first keyframe starts after the clip's
+ * begin.
  *
  * Returns an empty array when all keyframes are invalid — the caller should
  * treat an empty envelope as "no automation, use static volume."
@@ -31,7 +33,7 @@ export function normaliseEnvelope(
     .filter((k) => Number.isFinite(k.time) && Number.isFinite(k.volume))
     .map((k) => ({
       time: Math.max(0, k.time - trackStart),
-      volume: Math.max(0, Math.min(1, k.volume)),
+      volume: clampAudioGain(k.volume),
     }))
     .sort((a, b) => a.time - b.time);
 
@@ -47,7 +49,7 @@ export function normaliseEnvelope(
 
   if (deduped.length === 0) return deduped;
   if (deduped[0]!.time > 0) {
-    deduped.unshift({ time: 0, volume: Math.max(0, Math.min(1, baseVolume)) });
+    deduped.unshift({ time: 0, volume: clampAudioGain(baseVolume) });
   }
   return deduped;
 }
@@ -114,8 +116,7 @@ function resolveVolumeProbeWindow(
     end = endAttr;
   }
   const staticAttr = parseFiniteDatasetNumber(el.dataset.volume) ?? 1;
-  const staticVolume = Math.max(0, Math.min(1, staticAttr));
-  return { start, end, staticVolume };
+  return { start, end, staticVolume: clampAudioGain(staticAttr) };
 }
 
 /**
@@ -136,29 +137,32 @@ export function probeElementVolumeKeyframes(
 ): VolumeKeyframe[] | null {
   const { start, end, staticVolume } = resolveVolumeProbeWindow(el, compositionDuration);
 
-  // Reset to data-volume so GSAP captures the correct FROM value.
-  el.volume = staticVolume;
-
   const step = 1 / Math.min(60, Math.max(1, sampleFps));
   const sampleStart = Math.max(0, start);
   const sampleEnd = Math.min(compositionDuration, end);
 
-  const keyframes: VolumeKeyframe[] = [];
-  let previousSample: VolumeKeyframe | undefined;
-  for (let t = sampleStart; t <= sampleEnd + 1e-6; t = Math.min(sampleEnd, t + step)) {
-    seekTimeline(t);
-    const raw = Number(el.volume);
-    if (Number.isFinite(raw)) {
-      const volume = Math.max(0, Math.min(1, raw));
-      const sample = {
-        time: Number(t.toFixed(6)),
-        volume: Number(volume.toFixed(6)),
-      };
-      recordVolumeSample(keyframes, previousSample, sample, t === sampleEnd);
-      previousSample = sample;
+  const keyframes: VolumeKeyframe[] = withUnclampedVolume(el, () => {
+    // Reset to data-volume so GSAP captures the correct FROM value. Above
+    // unity that only survives because the shadow accessor is installed.
+    el.volume = staticVolume;
+
+    const samples: VolumeKeyframe[] = [];
+    let previousSample: VolumeKeyframe | undefined;
+    for (let t = sampleStart; t <= sampleEnd + 1e-6; t = Math.min(sampleEnd, t + step)) {
+      seekTimeline(t);
+      const raw = Number(el.volume);
+      if (Number.isFinite(raw)) {
+        const sample = {
+          time: Number(t.toFixed(6)),
+          volume: Number(clampAudioGain(raw).toFixed(6)),
+        };
+        recordVolumeSample(samples, previousSample, sample, t === sampleEnd);
+        previousSample = sample;
+      }
+      if (t === sampleEnd) break;
     }
-    if (t === sampleEnd) break;
-  }
+    return samples;
+  });
 
   const hasAutomation = keyframes.some((kf) => Math.abs(kf.volume - staticVolume) > 0.0001);
   return hasAutomation ? keyframes : null;

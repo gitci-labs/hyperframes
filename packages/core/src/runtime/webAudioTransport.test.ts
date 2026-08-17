@@ -49,6 +49,70 @@ function setupTransport(currentTime = 100) {
 const mockBuffer = {} as AudioBuffer;
 const mockEl = { muted: false } as HTMLMediaElement;
 
+describe("WebAudioTransport gain routing", () => {
+  const elementSourceCtx = (state: AudioContextState) => {
+    const gainNode = { gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() };
+    const sourceNode = { connect: vi.fn() };
+    const ctx = {
+      state,
+      createMediaElementSource: vi.fn(() => sourceNode),
+      createGain: vi.fn(() => gainNode),
+      destination: {},
+    };
+    const transport = new WebAudioTransport();
+    (transport as unknown as { _ctx: unknown })._ctx = ctx;
+    (transport as unknown as { _masterGain: unknown })._masterGain = {
+      gain: { value: 1 },
+      connect: vi.fn(),
+    };
+    return { transport, ctx, gainNode };
+  };
+
+  it("routes an above-unity element through the graph the native volume cannot reach", () => {
+    // `<video data-has-audio>` is never scheduled as a buffer source, so without
+    // this it plays at the spec's 1.0 ceiling in preview while the render mixer
+    // applies the full authored gain — the delivered file louder than what was
+    // signed off on.
+    const { transport, ctx, gainNode } = elementSourceCtx("running");
+    const el = { muted: false } as HTMLMediaElement;
+
+    expect(transport.applyElementGain(el, 3.98)).toBe(true);
+    expect(ctx.createMediaElementSource).toHaveBeenCalledWith(el);
+    expect(gainNode.gain.value).toBeCloseTo(3.98, 5);
+
+    // One source per element is all the spec allows, so the node is reused.
+    expect(transport.applyElementGain(el, 2)).toBe(true);
+    expect(ctx.createMediaElementSource).toHaveBeenCalledOnce();
+    expect(gainNode.gain.value).toBeCloseTo(2, 5);
+  });
+
+  it("leaves an element that fits in el.volume on the native path", () => {
+    const { transport, ctx } = elementSourceCtx("running");
+    expect(transport.applyElementGain({ muted: false } as HTMLMediaElement, 0.5)).toBe(false);
+    expect(ctx.createMediaElementSource).not.toHaveBeenCalled();
+  });
+
+  it("does not route into a suspended graph, which would silence live audio", () => {
+    const { transport, ctx } = elementSourceCtx("suspended");
+    expect(transport.applyElementGain({ muted: false } as HTMLMediaElement, 3.98)).toBe(false);
+    expect(ctx.createMediaElementSource).not.toHaveBeenCalled();
+  });
+
+  it("applies mute and user volume to one master formula, not two writers", () => {
+    const transport = new WebAudioTransport();
+    const master = { gain: { value: 1 }, connect: vi.fn() };
+    (transport as unknown as { _masterGain: unknown })._masterGain = master;
+
+    transport.setVolume(0.4);
+    expect(master.gain.value).toBeCloseTo(0.4, 5);
+    transport.setMuted(true);
+    expect(master.gain.value).toBe(0);
+    // Unmuting used to reset the node to 1 and discard the user's volume.
+    transport.setMuted(false);
+    expect(master.gain.value).toBeCloseTo(0.4, 5);
+  });
+});
+
 describe("WebAudioTransport", () => {
   it("tracks play generation for async race prevention", () => {
     const transport = new WebAudioTransport();
@@ -166,6 +230,15 @@ describe("WebAudioTransport", () => {
   });
 
   describe("schedulePlayback timing", () => {
+    it("keeps author boost above unity on the per-element gain node", async () => {
+      const { transport, mock, gen } = setupTransport(100);
+
+      await transport.schedulePlayback(mockEl, mockBuffer, 0, 0, 0, 1, gen);
+      transport.applyElementGain(mockEl, 3.98);
+
+      expect(mock.gainNode.gain.value).toBeCloseTo(3.98, 5);
+    });
+
     it("starts in-progress clips immediately with correct buffer offset", async () => {
       const { transport, mock, gen } = setupTransport(100);
 

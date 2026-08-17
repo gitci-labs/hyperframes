@@ -7,6 +7,7 @@ import {
 import { VOLUME_RANGE } from "../audioAutomation.js";
 import { swallow } from "./diagnostics";
 import { getDebugSurface } from "./globals.js";
+import { clampAudioGain } from "../audioGain.js";
 
 function normalizeRate(rate: number): number {
   if (!Number.isFinite(rate) || rate <= 0) return 1;
@@ -99,6 +100,16 @@ export class WebAudioTransport {
   private _failedSrcs = new Set<string>();
   private _activeSources: ScheduledSource[] = [];
   private _masterGain: GainNode | null = null;
+  // Elements the native decoder still plays, routed through the graph so their
+  // gain can exceed the 1.0 ceiling `HTMLMediaElement.volume` imposes. Built
+  // lazily and kept for the context's life: `createMediaElementSource` can only
+  // be called once per element.
+  private _elementGains = new Map<HTMLMediaElement, GainNode>();
+  // The master gain has exactly one formula. Mute and user volume are two
+  // inputs to it, not two writers of it — a plain `setMuted(false)` used to
+  // reset the node to 1 and silently discard the user's volume.
+  private _userVolume = 1;
+  private _muted = false;
   // Composition-time reference frame: at AudioContext time `_rateAnchorCtx`,
   // composition time was `_rateAnchorComp`, and time has been advancing at
   // `_rate` composition-seconds per wallclock-second since.
@@ -113,6 +124,7 @@ export class WebAudioTransport {
       this._ctx = new AudioContext();
       this._masterGain = this._ctx.createGain();
       this._masterGain.connect(this._ctx.destination);
+      this.applyMasterGain();
       return true;
     } catch {
       return false;
@@ -206,7 +218,7 @@ export class WebAudioTransport {
       sourceNode.playbackRate.value = safeRate;
 
       const gainNode = this._ctx.createGain();
-      gainNode.gain.value = volume;
+      gainNode.gain.value = clampAudioGain(volume);
 
       const elapsed = compositionTime - compositionStart;
       const scheduledAt = this._ctx.currentTime;
@@ -346,28 +358,95 @@ export class WebAudioTransport {
     this._paused = true;
   }
 
+  private applyMasterGain(): void {
+    if (!this._masterGain) return;
+    this._masterGain.gain.value = this._muted ? 0 : Math.max(0, Math.min(1, this._userVolume));
+  }
+
   setVolume(volume: number): void {
-    if (this._masterGain) {
-      this._masterGain.gain.value = Math.max(0, Math.min(1, volume));
+    this._userVolume = Number.isFinite(volume) ? volume : 1;
+    this.applyMasterGain();
+  }
+
+  /**
+   * Apply a clip's AUTHOR gain — the user's master volume is applied once, by
+   * `applyMasterGain`, and must not be folded in by the caller.
+   *
+   * Returns true when the graph now carries the whole gain, which tells the
+   * caller to leave `el.volume` at unity. A scheduled buffer source replaces
+   * the element's audio outright (the element is muted), so it reports false;
+   * only the media-element route feeds the graph FROM `el.volume` and so needs
+   * that unity.
+   */
+  applyElementGain(el: HTMLMediaElement, authorGain: number): boolean {
+    const safeGain = clampAudioGain(authorGain);
+    if (this.applyScheduledSourceGain(el, safeGain)) return false;
+    return this.applyMediaElementGain(el, safeGain);
+  }
+
+  /** The decoded-buffer route. Returns whether this element has one at all. */
+  private applyScheduledSourceGain(el: HTMLMediaElement, gain: number): boolean {
+    let scheduled = false;
+    for (const source of this._activeSources) {
+      if (source.el !== el) continue;
+      scheduled = true;
+      this.setGain(source.gainNode, gain);
+    }
+    return scheduled;
+  }
+
+  /** The native-playback route. Returns whether the graph now carries the gain. */
+  private applyMediaElementGain(el: HTMLMediaElement, gain: number): boolean {
+    const existing = this._elementGains.get(el);
+    // Nothing to fix while the gain fits in `el.volume`; leave untouched
+    // elements on the plain native path they have always used.
+    if (!existing && gain <= 1) return false;
+    const gainNode = existing ?? this.attachMediaElementGain(el);
+    return gainNode ? this.setGain(gainNode, gain) : false;
+  }
+
+  private setGain(gainNode: GainNode, gain: number): boolean {
+    try {
+      gainNode.gain.value = gain;
+      return true;
+    } catch (err) {
+      swallow("webAudioTransport.applyElementGain", err);
+      return false;
     }
   }
 
-  setElementVolume(el: HTMLMediaElement, volume: number): void {
-    const safeVolume = Math.max(0, Math.min(1, volume));
-    for (const source of this._activeSources) {
-      if (source.el !== el) continue;
-      try {
-        source.gainNode.gain.value = safeVolume;
-      } catch (err) {
-        swallow("webAudioTransport.setElementVolume", err);
-      }
+  /**
+   * Route a natively-played element through the graph so its gain can exceed
+   * unity. Used for `<video data-has-audio>`, which the buffer-source path does
+   * not schedule: without this the render mixer would apply an authored boost
+   * the preview could not, and the delivered file would be louder than what the
+   * author signed off on.
+   */
+  private attachMediaElementGain(el: HTMLMediaElement): GainNode | null {
+    if (!this._ctx || !this._masterGain) return null;
+    // Only while the context is actually running. Routing an element into a
+    // suspended graph (no user gesture yet) would silence audio that the native
+    // path is playing right now, and the routing cannot be undone — one call
+    // per element is all the spec allows.
+    if (this._ctx.state !== "running") return null;
+    try {
+      const source = this._ctx.createMediaElementSource(el);
+      const gainNode = this._ctx.createGain();
+      source.connect(gainNode);
+      gainNode.connect(this._masterGain);
+      this._elementGains.set(el, gainNode);
+      return gainNode;
+    } catch (err) {
+      // Already sourced elsewhere, or a tainted cross-origin source. The
+      // element keeps playing natively at its clamped volume.
+      swallow("webAudioTransport.attachMediaElementGain", err);
+      return null;
     }
   }
 
   setMuted(muted: boolean): void {
-    if (this._masterGain) {
-      this._masterGain.gain.value = muted ? 0 : 1;
-    }
+    this._muted = muted;
+    this.applyMasterGain();
   }
 
   isActive(): boolean {
@@ -382,6 +461,14 @@ export class WebAudioTransport {
 
   destroy(): void {
     this.stopAll();
+    for (const gainNode of this._elementGains.values()) {
+      try {
+        gainNode.disconnect();
+      } catch {
+        // Already torn down.
+      }
+    }
+    this._elementGains.clear();
     this._bufferCache.clear();
     this._failedSrcs.clear();
     if (this._ctx) {

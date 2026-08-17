@@ -340,7 +340,10 @@ describe("syncRuntimeMedia", () => {
           timeSeconds: t,
           playing: true,
           playbackRate: 1,
-          onElementVolume: (_el, v) => seen.push(v),
+          applyElementGain: (_el, v) => {
+            seen.push(v);
+            return false;
+          },
         });
       }
       return seen;
@@ -365,6 +368,28 @@ describe("syncRuntimeMedia", () => {
       expect(only).toBeCloseTo(0.55, 5);
     });
 
+    it("sends boosted author gain to Web Audio while keeping the native element legal", () => {
+      const clip = createMockClip({ start: 0, end: 10, volume: 3.98 });
+      Object.defineProperty(clip.el, "readyState", { value: 4, writable: true });
+      let transportGain = -1;
+
+      syncRuntimeMedia({
+        clips: [clip],
+        timeSeconds: 1,
+        playing: true,
+        playbackRate: 1,
+        applyElementGain: (_el, gain) => {
+          transportGain = gain;
+          // The transport reports that it now carries the gain, which is what
+          // keeps the native element at unity instead of the clamped product.
+          return true;
+        },
+      });
+
+      expect(transportGain).toBeCloseTo(3.98, 5);
+      expect(clip.el.volume).toBe(1);
+    });
+
     /**
      * The render bakes the lane at CLIP-LOCAL time: prepareAudioTrack already
      * cut the wav with `-ss mediaStart`, so its t=0 is the clip's start, and
@@ -383,8 +408,9 @@ describe("syncRuntimeMedia", () => {
           timeSeconds: t,
           playing: true,
           playbackRate: 1,
-          onElementVolume: (_el, v) => {
+          applyElementGain: (_el, v) => {
             seen = v;
+            return false;
           },
         });
         return seen;
@@ -411,8 +437,9 @@ describe("syncRuntimeMedia", () => {
         timeSeconds: 5,
         playing: true,
         playbackRate: 1,
-        onElementVolume: (_el, v) => {
+        applyElementGain: (_el, v) => {
           seen = v;
+          return false;
         },
       });
       expect(seen).toBeCloseTo(0.1, 5);
@@ -694,15 +721,15 @@ describe("syncRuntimeMedia", () => {
     expect(clip.el.volume).toBe(0.5);
   });
 
-  it("reports the effective element volume to external audio transports", () => {
+  it("reports the clip's author gain to external audio transports", () => {
     const clip = createMockClip({ start: 0, end: 10, volume: 0 });
-    const onElementVolume = vi.fn();
+    const applyElementGain = vi.fn().mockReturnValue(false);
     syncRuntimeMedia({
       clips: [clip],
       timeSeconds: 0,
       playing: false,
       playbackRate: 1,
-      onElementVolume,
+      applyElementGain,
     });
     clip.el.volume = 0.75;
     syncRuntimeMedia({
@@ -711,11 +738,13 @@ describe("syncRuntimeMedia", () => {
       playing: false,
       playbackRate: 1,
       userVolume: 0.5,
-      onElementVolume,
+      applyElementGain,
     });
 
+    // The transport applies the user's volume once, on its master gain, so it
+    // is told the author gain alone. The native element still needs the product.
     expect(clip.el.volume).toBeCloseTo(0.375);
-    expect(onElementVolume).toHaveBeenLastCalledWith(clip.el, 0.375);
+    expect(applyElementGain).toHaveBeenLastCalledWith(clip.el, 0.75);
   });
 
   describe("per-element mute (Web Audio ownership)", () => {

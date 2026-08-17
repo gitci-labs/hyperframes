@@ -28,6 +28,7 @@ import {
 } from "./media";
 import { handleErrorForProxy, handleMetadataForProxy, maybeProxyProactively } from "./mediaProxy";
 import { probeAndCacheElementVolume, type VolumeKeyframe } from "./mediaVolumeEnvelope.js";
+import { clampAudioGain, clampNativeMediaVolume } from "../audioGain.js";
 import { createPickerModule } from "./picker";
 import { createRuntimePlayer, type RuntimePlayerTransport } from "./player";
 import { createRuntimeState } from "./state";
@@ -1978,11 +1979,17 @@ export function initSandboxRuntimeModular(): void {
     }
   };
 
+  // Which media elements `syncRuntimeMedia` drives. It owns their volume every
+  // tick, so any other writer (the bridge's master-volume handler) must skip
+  // them or the two fight and the transport reads the loser back as the clip's
+  // author gain.
+  const isTransportOwnedMedia = (element: Element): boolean =>
+    element.hasAttribute("data-start") ||
+    Boolean(resolveMediaCompositionContext(element).compositionRoot);
+
   const syncMediaForCurrentState = () => {
     const cache = refreshRuntimeMediaCache({
-      shouldIncludeElement: (element) =>
-        element.hasAttribute("data-start") ||
-        Boolean(resolveMediaCompositionContext(element).compositionRoot),
+      shouldIncludeElement: isTransportOwnedMedia,
       resolveStartSeconds: (element) => {
         return resolveAbsoluteMediaStartSeconds(element);
       },
@@ -2039,7 +2046,7 @@ export function initSandboxRuntimeModular(): void {
         userMuted: state.bridgeMuted,
         userVolume: state.bridgeVolume,
         forceSync,
-        onElementVolume: (el, volume) => webAudio.setElementVolume(el, volume),
+        applyElementGain: (el, authorGain) => webAudio.applyElementGain(el, authorGain),
         isWebAudioOwned: (el) => webAudio.ownsElement(el),
         onAutoplayBlocked: () => {
           if (state.mediaAutoplayBlockedPosted) return;
@@ -3036,7 +3043,9 @@ export function initSandboxRuntimeModular(): void {
       const mediaStart =
         Number.parseFloat(rawEl.dataset.playbackStart ?? rawEl.dataset.mediaStart ?? "0") || 0;
       const volumeAttr = Number.parseFloat(rawEl.dataset.volume ?? "");
-      const vol = Number.isFinite(volumeAttr) ? volumeAttr : 1;
+      // Author gain only. The user's master volume rides the transport's master
+      // gain; folding it in here too applied it twice.
+      const vol = clampAudioGain(Number.isFinite(volumeAttr) ? volumeAttr : 1);
       const durationAttr = Number.parseFloat(rawEl.dataset.duration ?? "");
       let clipDuration =
         Number.isFinite(durationAttr) && durationAttr > 0 ? durationAttr : Number.POSITIVE_INFINITY;
@@ -3061,7 +3070,7 @@ export function initSandboxRuntimeModular(): void {
           compStart,
           mediaStart,
           clock.now(),
-          vol * state.bridgeVolume,
+          vol,
           gen,
           state.playbackRate,
           clipDuration,
@@ -3141,13 +3150,20 @@ export function initSandboxRuntimeModular(): void {
     onSetVolume: (volume) => {
       state.bridgeVolume = volume;
       webAudio.setVolume(volume);
+      // Only untimed media is set directly. `syncRuntimeMedia` already folds
+      // `state.bridgeVolume` into every clip it owns; writing those here too
+      // made the next tick see a changed `el.volume`, latch the clamped product
+      // as the clip's author gain, and drop a boosted clip by up to 12 dB on
+      // every master-fader move.
       const mediaEls = document.querySelectorAll("video, audio");
       for (const el of mediaEls) {
-        if (!(el instanceof HTMLMediaElement)) continue;
+        if (!(el instanceof HTMLMediaElement) || isTransportOwnedMedia(el)) continue;
         const parsed = parseFloat(el.dataset.volume ?? "");
         const clipVolume = Number.isFinite(parsed) ? parsed : 1;
-        el.volume = clipVolume * volume;
+        el.volume = clampNativeMediaVolume(clampAudioGain(clipVolume) * volume);
       }
+      state.mediaForceSyncNextTick = true;
+      syncMediaForCurrentState();
     },
     onSetMediaOutputMuted: (muted) => {
       state.mediaOutputMuted = muted;
