@@ -46,6 +46,12 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Callable
 
+# Windows sizes stdio to the ANSI code page (cp1252), which cannot encode every glyph
+# a finding message carries. These scripts emit UTF-8 on every platform; say so.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
 BLOCKER = "blocker"
 WARNING = "warning"
 INFO = "info"
@@ -272,7 +278,9 @@ def _find_matching_paren(src: str, open_idx: int) -> int | None:
 
 
 def lint_file(path: Path) -> list[Finding]:
-    src = path.read_text()
+    # Remotion sources are UTF-8. Left to the platform default, a source carrying an
+    # em dash or a curly quote raises UnicodeDecodeError on Windows before any rule runs.
+    src = path.read_text(encoding="utf-8")
     findings: list[Finding] = []
 
     def loc(offset: int) -> tuple[int, int]:

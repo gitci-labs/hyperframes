@@ -22,6 +22,12 @@ import sys
 
 import numpy as np
 
+# Windows sizes stdio to the ANSI code page (cp1252). These scripts emit UTF-8 on
+# every platform; say so rather than depending on the console's code page.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
 # ---------------------------------------------------------------------------
 # FFT parameters
 #
@@ -178,7 +184,7 @@ def main():
 
     data = extract(args.input, args.fps, args.bands)
 
-    with open(args.output, "w") as f:
+    with open(args.output, "w", encoding="utf-8") as f:
         json.dump(data, f)
 
     print(f"Wrote {args.output} ({data['totalFrames']} frames, {data['bands']} bands)", file=sys.stderr)

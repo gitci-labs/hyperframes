@@ -20,6 +20,12 @@ import sys
 import wave
 from pathlib import Path
 
+# Windows sizes stdio to the ANSI code page (cp1252). These scripts emit UTF-8 on
+# every platform; say so rather than depending on the console's code page.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
 DEFAULT_PROMPT = "Uplifting corporate tech, bright and modern, gentle piano with synth pads"
 SAMPLE_RATE = 48000
 CHANNELS = 2
