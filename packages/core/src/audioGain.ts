@@ -52,7 +52,13 @@ export function formatAudioGain(gain: number): string {
  * probe observes an out-of-range volume, and the shadow is removed afterwards.
  */
 export function withUnclampedVolume<T>(el: HTMLMediaElement, probe: () => T): T {
-  const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "volume");
+  // Guarded for non-DOM runtimes: the probe that calls this is also reachable
+  // from tests and tools that run outside a browser, where the clamped path is
+  // the right (and only) answer.
+  const descriptor =
+    typeof HTMLMediaElement === "undefined"
+      ? undefined
+      : Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "volume");
   const nativeGet = descriptor?.get;
   const nativeSet = descriptor?.set;
   if (!nativeGet || !nativeSet) return probe();

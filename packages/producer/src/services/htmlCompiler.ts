@@ -2215,10 +2215,13 @@ export async function discoverAudioVolumeAutomationFromTimeline(
       // the clamped value. Mirrors `withUnclampedVolume` in
       // packages/core/src/audioGain.ts, which the preview probe uses; this copy
       // exists only because the probe body is serialized into the page.
-      const volumeDescriptor = Object.getOwnPropertyDescriptor(
-        HTMLMediaElement.prototype,
-        "volume",
-      );
+      // Guarded because this body is also executed directly by tests that
+      // stand in for a Page, where there is no DOM and no HTMLMediaElement.
+      // Without the descriptor the probe simply keeps the clamped path.
+      const volumeDescriptor =
+        typeof HTMLMediaElement === "undefined"
+          ? undefined
+          : Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "volume");
       const nativeVolumeGet = volumeDescriptor?.get;
       const nativeVolumeSet = volumeDescriptor?.set;
       const withUnclampedVolume = <T>(el: HTMLMediaElement, probe: () => T): T => {
