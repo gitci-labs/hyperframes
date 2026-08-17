@@ -3,11 +3,10 @@ import { PropertyPanel } from "./editor/PropertyPanel";
 import { LayersPanel } from "./editor/LayersPanel";
 import { CaptionPropertyPanel } from "../captions/components/CaptionPropertyPanel";
 import { BlockParamsPanel } from "./editor/BlockParamsPanel";
-import { RenderQueue } from "./renders/RenderQueue";
+import { RenderQueuePanel } from "./renders/RenderQueuePanel";
 import { SlideshowPanel } from "./panels/SlideshowPanel";
 import { VariablesPanel, type StudioEditPersistenceProps } from "./panels/VariablesPanel";
 import { PanelTabButton } from "./PanelTabButton";
-import { usePreviewVariablesStore } from "../hooks/previewVariablesStore";
 import type { RenderJob } from "./renders/useRenderQueue";
 import type { BlockParam } from "@hyperframes/core/registry";
 import { STUDIO_FLAT_INSPECTOR_ENABLED } from "./editor/manualEditingAvailability";
@@ -108,7 +107,6 @@ export function StudioRightPanel({
     projectId,
     activeCompPath,
     showToast,
-    compositionDimensions,
     waitForPendingDomEditSaves,
     renderQueue,
   } = useStudioShellContext();
@@ -427,36 +425,7 @@ export function StudioRightPanel({
     </DesignPanelPromoteProvider>
   );
 
-  const renderQueuePanel = (
-    <RenderQueue
-      jobs={renderJobs}
-      projectId={projectId}
-      onDelete={renderQueue.deleteRender}
-      onCancel={renderQueue.cancelRender}
-      loadError={renderQueue.loadError}
-      onRetryLoad={renderQueue.reloadRenders}
-      actionError={renderQueue.actionError}
-      onDismissActionError={renderQueue.dismissActionError}
-      onClearCompleted={renderQueue.clearCompleted}
-      onStartRender={async (format, quality, resolution, fps) => {
-        await waitForPendingDomEditSaves();
-        const composition =
-          activeCompPath && activeCompPath !== "index.html" ? activeCompPath : undefined;
-        await renderQueue.startRender({
-          fps,
-          quality,
-          format,
-          resolution,
-          composition,
-          // Render what the user is previewing: active variable overrides
-          // from the Variables panel ride along (undefined = defaults).
-          variables: usePreviewVariablesStore.getState().values ?? undefined,
-        });
-      }}
-      compositionDimensions={compositionDimensions}
-      isRendering={renderQueue.isRendering}
-    />
-  );
+  const renderQueuePanel = <RenderQueuePanel />;
 
   return (
     <>

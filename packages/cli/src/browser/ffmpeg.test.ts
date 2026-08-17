@@ -71,3 +71,45 @@ describe("resolveH264EncoderMode", () => {
     );
   });
 });
+
+// Studio renders the command behind a copy button, so "is there a command at
+// all" has to be a typed answer rather than a guess made by pattern-matching
+// the prose hint. The hint is derived from the command, so they move together.
+describe("getFFmpegInstallCommand / getFFmpegInstallHint", () => {
+  const realPlatform = process.platform;
+
+  function setPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  }
+
+  afterEach(() => {
+    setPlatform(realPlatform);
+  });
+
+  it("gives macOS a pasteable command and uses it verbatim as the hint", async () => {
+    setPlatform("darwin");
+    const { getFFmpegInstallCommand, getFFmpegInstallHint } = await import("./ffmpeg.js");
+
+    expect(getFFmpegInstallCommand()).toBe("brew install ffmpeg");
+    expect(getFFmpegInstallHint()).toBe("brew install ffmpeg");
+  });
+
+  it("gives Windows a winget command and keeps the manual route in the hint", async () => {
+    setPlatform("win32");
+    const { getFFmpegInstallCommand, getFFmpegInstallHint } = await import("./ffmpeg.js");
+
+    const command = getFFmpegInstallCommand();
+    expect(command).toBe("winget install --id Gyan.FFmpeg -e");
+    // Machines predating winget still need somewhere to go.
+    expect(getFFmpegInstallHint()).toContain(command);
+    expect(getFFmpegInstallHint()).toContain("https://ffmpeg.org/download.html");
+  });
+
+  it("reports no command on a platform without one, and still hints", async () => {
+    setPlatform("sunos");
+    const { getFFmpegInstallCommand, getFFmpegInstallHint } = await import("./ffmpeg.js");
+
+    expect(getFFmpegInstallCommand()).toBeUndefined();
+    expect(getFFmpegInstallHint()).toBe("https://ffmpeg.org/download.html");
+  });
+});
