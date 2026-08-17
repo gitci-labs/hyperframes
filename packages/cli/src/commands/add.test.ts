@@ -482,10 +482,26 @@ describe("describeInstallFailure", () => {
     expect(message).toContain("HTTPS_PROXY");
   });
 
-  it("surfaces the underlying cause when node attached one", () => {
-    const err = new Error("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND") });
+  it("names the project's own registry when it is not the public one", () => {
+    // The reported failure: hyperframes.json pointed at a private host with a
+    // self-signed certificate. Telling that reader to check their connection
+    // sends them to debug the one thing that was working.
+    const message = describeInstallFailure(
+      new Error("fetch failed"),
+      "https://private.example/registry",
+    );
 
-    expect(describeInstallFailure(err)).toContain("getaddrinfo ENOTFOUND");
+    expect(message).toContain("https://private.example/registry");
+    expect(message).toContain("not the public registry");
+  });
+
+  it("stays quiet about the registry when it is the default one", () => {
+    const message = describeInstallFailure(
+      new Error("fetch failed"),
+      "https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry",
+    );
+
+    expect(message).not.toContain("not the public registry");
   });
 
   it("leaves a non-transport failure exactly as it was", () => {

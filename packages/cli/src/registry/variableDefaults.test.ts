@@ -6,8 +6,8 @@ import { applyVariableDefaults } from "./variableDefaults.js";
 const COMPONENT = `<div
   data-hf-ui-root
   data-composition-variables='[
-    { "id": "size", "type": "number", "role": "style", "default": 52, "min": 24, "max": 120 },
-    { "id": "tone", "type": "enum", "role": "style", "default": "strong", "options": [{ "value": "strong" }, { "value": "muted" }, { "value": "accent" }] }
+    { "id": "size", "type": "number", "role": "style", "label": "Size", "default": 52, "min": 24, "max": 120 },
+    { "id": "tone", "type": "enum", "role": "style", "label": "Tone", "default": "strong", "options": [{ "value": "strong", "label": "Strong" }, { "value": "muted", "label": "Muted" }, { "value": "accent", "label": "Accent" }] }
   ]'
 >
   <span>Design</span>
@@ -74,8 +74,8 @@ describe("applyVariableDefaults", () => {
 
   it("escapes a value containing the attribute's own delimiter", () => {
     const withText = COMPONENT.replace(
-      '{ "id": "size", "type": "number", "role": "style", "default": 52, "min": 24, "max": 120 }',
-      '{ "id": "label", "type": "string", "default": "hi" }',
+      '{ "id": "size", "type": "number", "role": "style", "label": "Size", "default": 52, "min": 24, "max": 120 }',
+      '{ "id": "label", "type": "string", "label": "Label", "default": "hi" }',
     );
     const r = applyVariableDefaults(withText, { label: "it's fine" });
 

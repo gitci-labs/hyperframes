@@ -15,7 +15,7 @@ import { existsSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import { ITEM_TYPE_DIRS, type RegistryItem } from "@hyperframes/core";
 import { c } from "../ui/colors.js";
-import { installItem, resolveItemsByTag } from "../registry/index.js";
+import { DEFAULT_REGISTRY_URL, installItem, resolveItemsByTag } from "../registry/index.js";
 import { resolveItemWithDependencies } from "../registry/resolver.js";
 import {
   gateRegistryItemsCompatibility,
@@ -216,7 +216,7 @@ async function installAll(
       }
     }
   } catch (err) {
-    throw new AddError(describeInstallFailure(err), "install-failed");
+    throw new AddError(describeInstallFailure(err, baseUrl), "install-failed");
   }
   return { written, preserved, variablesApplied, variablesUnknown, variablesInvalid };
 }
@@ -229,17 +229,28 @@ async function installAll(
  * That is what a user sees after copying a command off the catalog page, and
  * it reads like the command was wrong rather than the network.
  */
-export function describeInstallFailure(err: unknown): string {
+export function describeInstallFailure(err: unknown, registry?: string): string {
   const message = err instanceof Error ? err.message : String(err);
   const cause = err instanceof Error && err.cause instanceof Error ? err.cause.message : "";
   const transport =
     /fetch failed|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|aborted/i;
   if (!transport.test(`${message} ${cause}`)) return `Install failed: ${message}`;
+
+  // Name the registry first. A project that set `registry` in hyperframes.json
+  // points at a private host, and when that host is down the failure has
+  // nothing to do with the user's connection -- telling them to check their
+  // network sends them to debug the one thing that is working.
+  const custom =
+    registry && !registry.startsWith(DEFAULT_REGISTRY_URL)
+      ? `\n  This project's hyperframes.json sets registry to ${registry}, so that is the host ` +
+        "being contacted, not the public registry. If it is down or private, that is the failure."
+      : "";
   return (
-    `Install failed: could not download the item's files${cause ? ` (${cause})` : ""}. ` +
-    "The registry is served over the network and item files are not cached, so this is " +
-    "usually connectivity, a proxy, or an offline machine rather than a bad command. " +
-    "Check your connection and retry; if you are behind a proxy, set HTTPS_PROXY."
+    `Install failed: could not download the item's files.\n  ${message}` +
+    "\n  Item files are not cached, so every install fetches them. This is usually the " +
+    "registry host or the network rather than a bad command." +
+    custom +
+    "\n  Retry, or set HTTPS_PROXY if you are behind a proxy."
   );
 }
 

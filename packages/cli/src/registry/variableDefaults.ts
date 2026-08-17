@@ -16,14 +16,7 @@
  * silently discarded for every component in the catalog.
  */
 
-interface VariableDeclaration {
-  id?: unknown;
-  type?: unknown;
-  default?: unknown;
-  options?: unknown;
-  min?: unknown;
-  max?: unknown;
-}
+import { isCompositionVariable, type CompositionVariable } from "@hyperframes/core/variables";
 
 export interface ApplyResult {
   /** The source with defaults rewritten. Unchanged when nothing applied. */
@@ -59,13 +52,8 @@ function encode(json: string, quote: string): string {
   return quote === "'" ? json.replace(/'/g, "&#39;") : json.replace(/"/g, "&quot;");
 }
 
-function optionValues(decl: VariableDeclaration): string[] | null {
-  if (!Array.isArray(decl.options)) return null;
-  return decl.options.map((o) =>
-    o && typeof o === "object" && "value" in o
-      ? String((o as { value: unknown }).value)
-      : String(o),
-  );
+function optionValues(decl: CompositionVariable): string[] | null {
+  return decl.type === "enum" ? decl.options.map((option) => option.value) : null;
 }
 
 /**
@@ -75,22 +63,22 @@ function optionValues(decl: VariableDeclaration): string[] | null {
  * here would produce a file that renders as if the value had been ignored --
  * which is the exact failure this function exists to remove.
  */
-function rejectEnum(decl: VariableDeclaration, value: unknown): string | null {
-  const opts = optionValues(decl);
-  if (!opts) return null;
-  return opts.includes(String(value)) ? null : `not one of ${opts.join(", ")}`;
+function rejectEnum(decl: CompositionVariable, value: unknown): string | null {
+  const options = optionValues(decl);
+  if (!options) return null;
+  return options.includes(String(value)) ? null : `not one of ${options.join(", ")}`;
 }
 
-function rejectNumber(decl: VariableDeclaration, value: unknown): string | null {
+function rejectNumber(decl: CompositionVariable, value: unknown): string | null {
   if (decl.type !== "number") return null;
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return "not a number";
-  if (typeof decl.min === "number" && n < decl.min) return `below min ${decl.min}`;
-  if (typeof decl.max === "number" && n > decl.max) return `above max ${decl.max}`;
+  if (decl.min !== undefined && n < decl.min) return `below min ${decl.min}`;
+  if (decl.max !== undefined && n > decl.max) return `above max ${decl.max}`;
   return null;
 }
 
-function reject(decl: VariableDeclaration, value: unknown): string | null {
+function reject(decl: CompositionVariable, value: unknown): string | null {
   return rejectEnum(decl, value) ?? rejectNumber(decl, value);
 }
 
@@ -104,19 +92,31 @@ export function applyVariableDefaults(
   const found = findDeclaration(source);
   if (!found) return { html: source, applied: [], unknown: ids, invalid: [] };
 
-  let declared: VariableDeclaration[];
+  // isCompositionVariable is the predicate parseCompositionVariables filters
+  // with -- the schema's own definition of a well-formed declaration. Using it
+  // here means everything below works on a real discriminated union instead of
+  // a bag of `unknown` re-checked at each use, and a declaration the schema
+  // rejects is one we must not rewrite, because we would be guessing at its
+  // shape. parseCompositionVariables itself takes a DOM Element, which the CLI
+  // has no business constructing to read a string.
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(decode(found.raw));
-    if (!Array.isArray(parsed)) return { html: source, applied: [], unknown: ids, invalid: [] };
-    declared = parsed as VariableDeclaration[];
+    parsed = JSON.parse(decode(found.raw));
   } catch {
-    // A declaration we cannot parse is one we must not rewrite.
+    return { html: source, applied: [], unknown: ids, invalid: [] };
+  }
+  if (!Array.isArray(parsed)) return { html: source, applied: [], unknown: ids, invalid: [] };
+  const declared: CompositionVariable[] = parsed.filter(isCompositionVariable);
+  if (declared.length !== parsed.length) {
+    // Rewriting a partially understood declaration would drop the entries we
+    // could not model, so leave the file exactly as the registry shipped it.
     return { html: source, applied: [], unknown: ids, invalid: [] };
   }
 
   const applied: string[] = [];
   const invalid: { id: string; reason: string }[] = [];
-  const byId = new Map(declared.map((d) => [String(d.id), d]));
+  const byId = new Map(declared.map((decl) => [decl.id, decl]));
+  const updated = new Map<string, string | number>();
 
   for (const [id, value] of Object.entries(values)) {
     const decl = byId.get(id);
@@ -126,7 +126,10 @@ export function applyVariableDefaults(
       invalid.push({ id, reason });
       continue;
     }
-    decl.default = decl.type === "number" ? Number(value) : value;
+    // The declaration's own type decides how the value is stored. A number
+    // written as the string "76" would trip the composition's guard and fall
+    // back, which looks exactly like the value being ignored.
+    updated.set(id, decl.type === "number" ? Number(value) : String(value));
     applied.push(id);
   }
 
@@ -136,7 +139,12 @@ export function applyVariableDefaults(
   // One declaration per line, matching how the registry authors these files, so
   // a re-install produces a readable diff rather than one enormous line.
   const quote = source[found.start - 1]!;
-  const body = declared.map((d) => `    ${JSON.stringify(d)}`).join(",\n");
+  const body = declared
+    .map((decl) => {
+      const next = updated.has(decl.id) ? { ...decl, default: updated.get(decl.id)! } : decl;
+      return `    ${JSON.stringify(next)}`;
+    })
+    .join(",\n");
   const rewritten = encode(`[\n${body}\n  ]`, quote);
   const html = source.slice(0, found.start) + rewritten + source.slice(found.end);
   return { html, applied, unknown, invalid };
