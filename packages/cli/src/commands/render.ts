@@ -153,6 +153,10 @@ export default defineCommand({
         "to a directory for AE/Nuke/Fusion ingest; gif is best at 15fps for PRs/docs)",
       default: "mp4",
     },
+    codec: {
+      type: "string",
+      description: "MP4 video codec: h264, h265 (Default: h264)",
+    },
     "gif-loop": {
       type: "string",
       description: "GIF loop count, 0 = infinite. Range: 0-65535. Only used with --format gif.",
@@ -377,6 +381,7 @@ export interface RenderOptions {
   /** Authoring workflow skill that drove this render (telemetry attribution). */
   authoringSkill?: string;
   format: RenderFormat;
+  codec?: "h264" | "h265";
   gifLoop?: number;
   workers?: number;
   gpu: boolean;
@@ -700,6 +705,7 @@ async function renderDocker(
       fps: options.fps,
       quality: options.quality,
       format: options.format,
+      codec: options.codec ?? "h264",
       gifLoop: options.gifLoop,
       workers: options.workers,
       gpu: options.gpu,
@@ -874,6 +880,7 @@ export async function renderLocal(
       fps: options.fps,
       quality: options.quality,
       format: options.format,
+      codec: options.codec,
       gifLoop: options.gifLoop,
       workers: options.workers,
       useGpu: options.gpu,

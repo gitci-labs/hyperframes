@@ -30,6 +30,7 @@ describe("createRenderPlan", () => {
 
     expect(plan.fps).toEqual({ num: 24, den: 1 });
     expect(plan.outputPath).toBe(resolve("result.mp4"));
+    expect(plan.codec).toBe("h264");
     expect(plan.hdrMode).toBe("auto");
     expect(plan.bestEffort).toBe(true);
     expect(plan.batchConcurrency).toBe(1);
@@ -51,6 +52,20 @@ describe("createRenderPlan", () => {
 
   it("classifies malformed command input as a usage error", () => {
     expect(() => createRenderPlan({ dir: projectDir, quality: "maximum" })).toThrow(CliUsageError);
+  });
+
+  it("selects h265 for an MP4 render", () => {
+    expect(createRenderPlan({ dir: projectDir, codec: "h265" }).codec).toBe("h265");
+  });
+
+  it("rejects unsupported codecs and codec flags on non-MP4 output", () => {
+    expect(() => createRenderPlan({ dir: projectDir, codec: "av1" })).toThrow(CliUsageError);
+    expect(() => createRenderPlan({ dir: projectDir, format: "mov", codec: "h265" })).toThrow(
+      CliUsageError,
+    );
+    expect(() => createRenderPlan({ dir: projectDir, hdr: true, codec: "h264" })).toThrow(
+      CliUsageError,
+    );
   });
 
   it("rejects batch and single-render variables before execution", () => {

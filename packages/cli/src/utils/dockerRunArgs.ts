@@ -40,6 +40,7 @@ export interface DockerRenderOptions {
   fps: Fps;
   quality: "draft" | "standard" | "high";
   format: "mp4" | "webm" | "mov" | "png-sequence" | "gif";
+  codec?: "h264" | "h265";
   gifLoop?: number;
   workers?: number;
   gpu: boolean;
@@ -131,6 +132,7 @@ export function buildDockerRunArgs(input: DockerRunArgsInput): string[] {
     options.quality,
     "--format",
     options.format,
+    ...(options.codec === "h265" ? ["--codec", "h265"] : []),
     ...(options.gifLoop != null ? ["--gif-loop", String(options.gifLoop)] : []),
     ...(options.workers != null ? ["--workers", String(options.workers)] : []),
     ...(options.crf != null ? ["--crf", String(options.crf)] : []),

@@ -9,6 +9,7 @@ const BASE: DockerRenderOptions = {
   fps: { num: 30, den: 1 },
   quality: "standard",
   format: "mp4",
+  codec: "h264",
   gpu: false,
   browserGpu: false,
   hdrMode: "auto",
@@ -266,6 +267,15 @@ describe("buildDockerRunArgs", () => {
     expect(args).toContain("--video-bitrate");
     expect(args).toContain("10M");
     expect(args).not.toContain("--crf");
+  });
+
+  it("forwards an explicit H.265 codec to the container", () => {
+    const args = buildDockerRunArgs({
+      ...FIXED_INPUT,
+      options: { ...BASE, codec: "h265" },
+    });
+    expect(args).toContain("--codec");
+    expect(args).toContain("h265");
   });
 
   it("forwards --video-frame-format to the container when set to png", () => {

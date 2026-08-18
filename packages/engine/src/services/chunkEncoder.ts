@@ -111,6 +111,7 @@ export function getEncoderPreset(
   quality: "draft" | "standard" | "high",
   format: "mp4" | "webm" | "mov" = "mp4",
   hdr?: { transfer: HdrTransfer },
+  codec: "h264" | "h265" = "h264",
 ): EncoderPreset {
   const base = ENCODER_PRESETS[quality];
   if (format === "webm") {
@@ -137,6 +138,9 @@ export function getEncoderPreset(
       pixelFormat: "yuv420p10le",
       hdr,
     };
+  }
+  if (codec === "h265") {
+    return { ...base, codec: "h265", pixelFormat: "yuv420p" };
   }
   return { ...base, pixelFormat: "yuv420p" };
 }

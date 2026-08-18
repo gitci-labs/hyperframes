@@ -36,6 +36,7 @@ export interface RenderRequestOptions {
   fps: Fps;
   quality: "draft" | "standard" | "high";
   format: NonNullable<RenderConfig["format"]>;
+  codec?: RenderConfig["codec"];
   gifLoop?: number;
   workers?: number;
   useGpu?: boolean;
@@ -168,6 +169,7 @@ function assertRequestOptionScalars(options: Record<string, unknown>): void {
   }
   assertOptionalEnum(options, "strictness", ["strict", "best-effort"]);
   assertOptionalEnum(options, "hdrMode", ["auto", "force-hdr", "force-sdr"]);
+  assertOptionalEnum(options, "codec", ["h264", "h265"]);
   if (options.videoFrameFormat !== undefined && !isVideoFrameFormat(options.videoFrameFormat)) {
     throw new Error("Render request videoFrameFormat is invalid");
   }
@@ -194,6 +196,9 @@ function assertRequestOptions(options: unknown): asserts options is RenderReques
     throw new Error("Render request format is invalid");
   }
   assertRequestOptionScalars(options);
+  if (options.codec !== undefined && options.format !== "mp4") {
+    throw new Error("Render request codec is only valid for mp4 output");
+  }
   assertRequestOptionObjects(options);
 }
 

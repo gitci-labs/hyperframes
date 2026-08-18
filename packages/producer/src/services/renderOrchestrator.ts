@@ -312,6 +312,8 @@ export interface RenderConfig {
    * compositions when targeting alpha output.
    */
   format?: RenderOutputFormat;
+  /** MP4 video codec. H.265 remains SDR unless HDR is independently enabled. */
+  codec?: "h264" | "h265";
   /** GIF Netscape loop count. 0 means infinite looping. Only used with `format: "gif"`. */
   gifLoop?: number;
   workers?: number;
@@ -3407,7 +3409,7 @@ async function executeRenderPipeline(input: {
     // are never written to ffmpeg in the png-sequence path.
     const presetFormat: "mp4" | "webm" | "mov" =
       outputFormat === "webm" || outputFormat === "mov" ? outputFormat : "mp4";
-    const preset = getEncoderPreset(job.config.quality, presetFormat, encoderHdr);
+    const preset = getEncoderPreset(job.config.quality, presetFormat, encoderHdr, job.config.codec);
 
     // CLI overrides (--crf, --video-bitrate) flow through job.config and must
     // win over the preset-derived defaults. The CLI enforces mutual exclusivity

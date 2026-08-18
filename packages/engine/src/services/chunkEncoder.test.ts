@@ -663,6 +663,13 @@ describe("getEncoderPreset", () => {
     expect(preset.pixelFormat).toBe("yuv420p");
   });
 
+  it("returns SDR h265 with yuv420p when explicitly selected", () => {
+    const preset = getEncoderPreset("high", "mp4", undefined, "h265");
+    expect(preset.codec).toBe("h265");
+    expect(preset.pixelFormat).toBe("yuv420p");
+    expect(preset.hdr).toBeUndefined();
+  });
+
   it("returns vp9 with yuva420p for webm format", () => {
     const preset = getEncoderPreset("standard", "webm");
     expect(preset.codec).toBe("vp9");
@@ -865,6 +872,19 @@ describe("buildEncoderArgs GPU preset mapping", () => {
       expect(args[args.indexOf("-c:v") + 1]).toBe("hevc_nvenc");
       expect(presetArg(args)).toBe(nvencPreset);
     }
+  });
+
+  it("routes an explicit SDR h265 preset through VideoToolbox HEVC", () => {
+    const preset = getEncoderPreset("high", "mp4", undefined, "h265");
+    const args = buildEncoderArgs(
+      { ...baseOptions, ...preset, useGpu: true },
+      inputArgs,
+      "out.mp4",
+      "videotoolbox",
+    );
+
+    expect(args[args.indexOf("-c:v") + 1]).toBe("hevc_videotoolbox");
+    expect(args[args.indexOf("-tag:v") + 1]).toBe("hvc1");
   });
 
   it("rewrites QSV's unsupported ultrafast preset to veryfast", () => {

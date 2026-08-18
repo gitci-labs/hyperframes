@@ -37,6 +37,7 @@ const RENDER_FORMAT_LABEL = "mp4, webm, mov, png-sequence, or gif";
 
 export type RenderFormat = (typeof RENDER_FORMATS)[number];
 export type RenderQuality = "draft" | "standard" | "high";
+export type RenderCodec = "h264" | "h265";
 export type BrowserGpuMode = "auto" | "hardware" | "software";
 export type HdrMode = "auto" | "force-hdr" | "force-sdr";
 export type RenderProject = ReturnType<typeof resolveProject>;
@@ -57,6 +58,7 @@ export interface RenderCommandArgs {
   quality?: string;
   skill?: string;
   format?: string;
+  codec?: string;
   "gif-loop"?: string;
   "video-frame-format"?: string;
   workers?: string;
@@ -100,6 +102,7 @@ export interface RenderPlan {
   authoringSkill?: string;
   invalidAuthoringSkill?: string;
   format: RenderFormat;
+  codec: RenderCodec;
   gifLoop?: number;
   gifFpsCapped: boolean;
   videoFrameFormat: VideoFrameFormat;
@@ -210,6 +213,16 @@ export function createRenderPlan(args: RenderCommandArgs, now = new Date()): Ren
     errorBox("Invalid format", `Got "${formatRaw}". Must be ${RENDER_FORMAT_LABEL}.`);
     failUsage();
   }
+  const codecRaw = args.codec ?? "h264";
+  if (codecRaw !== "h264" && codecRaw !== "h265") {
+    errorBox("Invalid codec", `Got "${codecRaw}". Must be h264 or h265.`);
+    failUsage();
+  }
+  if (format !== "mp4" && args.codec !== undefined) {
+    errorBox("Conflicting flags", "--codec is only supported with --format mp4.");
+    failUsage();
+  }
+  const codec: RenderCodec = codecRaw;
 
   let gifFpsCapped = false;
   if (format === "gif" && fpsToNumber(fps) > 30) {
@@ -256,6 +269,10 @@ export function createRenderPlan(args: RenderCommandArgs, now = new Date()): Ren
   }
   if (args.hdr && args.sdr) {
     errorBox("Conflicting flags", "--hdr and --sdr are mutually exclusive.");
+    failUsage();
+  }
+  if (args.hdr && args.codec === "h264") {
+    errorBox("Conflicting flags", "--hdr requires h265; omit --codec or pass --codec h265.");
     failUsage();
   }
 
@@ -413,6 +430,7 @@ export function createRenderPlan(args: RenderCommandArgs, now = new Date()): Ren
     authoringSkill,
     invalidAuthoringSkill,
     format,
+    codec,
     gifLoop,
     gifFpsCapped,
     videoFrameFormat: videoFrameFormatRaw,
