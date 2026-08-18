@@ -67,11 +67,11 @@ jobs:
             --repository "$FORK_REPOSITORY" \
             --commit "${{ steps.release.outputs.commit }}"
 
-      - name: Test CLI
-        run: bun run --cwd packages/cli test
-
       - name: Build CLI and runtime dependencies
         run: bun run build
+
+      - name: Test CLI
+        run: bun run --cwd packages/cli test
 
       - name: Verify built CLI identity
         run: |

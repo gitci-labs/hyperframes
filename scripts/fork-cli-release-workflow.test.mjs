@@ -33,11 +33,11 @@ test("fork publishing uses an immutable tag checkout", () => {
   );
 });
 
-test("the CLI is stamped, tested, built, packed, and smoke-tested before upload", () => {
+test("the CLI dependencies are built before tests, packaging, and upload", () => {
   const orderedSteps = [
     "Stamp fork version and provenance",
-    "Test CLI",
     "Build CLI and runtime dependencies",
+    "Test CLI",
     "Verify built CLI identity",
     "Prepare unscoped package manifest",
     "Pack and verify release tarball",
