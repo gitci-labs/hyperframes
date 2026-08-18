@@ -1,0 +1,149 @@
+name: Publish gitci fork CLI release
+
+permissions: {}
+
+on:
+  push:
+    tags:
+      - "v*-gitci.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing fork release tag to rebuild (for example v0.7.111-gitci.2)
+        required: true
+        type: string
+
+concurrency:
+  group: fork-cli-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish fork CLI
+    if: github.repository == 'gitci-labs/hyperframes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      FORK_REPOSITORY: gitci-labs/hyperframes
+      HYPERFRAMES_NO_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          lfs: true
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+
+      - name: Verify immutable tagged checkout
+        id: release
+        run: |
+          set -euo pipefail
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+          RELEASE_COMMIT="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          CHECKED_OUT_COMMIT="$(git rev-parse HEAD)"
+          if [ "$CHECKED_OUT_COMMIT" != "$RELEASE_COMMIT" ]; then
+            echo "::error::Tag $RELEASE_TAG points to $RELEASE_COMMIT, checked out $CHECKED_OUT_COMMIT"
+            exit 1
+          fi
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "commit=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: ./.github/actions/prepare-ffmpeg-bin
+
+      - name: Install workspace dependencies
+        run: bash scripts/ci/install-workspace-dependencies.sh
+
+      - name: Stamp fork version and provenance
+        run: |
+          node scripts/prepare-fork-cli-release.mjs stamp \
+            --version "${{ steps.release.outputs.version }}" \
+            --tag "$RELEASE_TAG" \
+            --repository "$FORK_REPOSITORY" \
+            --commit "${{ steps.release.outputs.commit }}"
+
+      - name: Test CLI
+        run: bun run --cwd packages/cli test
+
+      - name: Build CLI and runtime dependencies
+        run: bun run build
+
+      - name: Verify built CLI identity
+        run: |
+          ACTUAL_VERSION="$(node packages/cli/bin/hyperframes.mjs --version)"
+          if [ "$ACTUAL_VERSION" != "${{ steps.release.outputs.version }}" ]; then
+            echo "::error::Built CLI reports $ACTUAL_VERSION; expected ${{ steps.release.outputs.version }}"
+            exit 1
+          fi
+
+      - name: Prepare unscoped package manifest
+        run: |
+          node scripts/prepare-fork-cli-release.mjs pack \
+            --version "${{ steps.release.outputs.version }}" \
+            --tag "$RELEASE_TAG" \
+            --repository "$FORK_REPOSITORY" \
+            --commit "${{ steps.release.outputs.commit }}"
+
+      - name: Pack and verify release tarball
+        id: artifact
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          ARTIFACT_DIR="$RUNNER_TEMP/hyperframes-release"
+          mkdir -p "$ARTIFACT_DIR"
+          cd packages/cli
+          npm pack --json --pack-destination "$ARTIFACT_DIR" > "$RUNNER_TEMP/hyperframes-pack.json"
+          TARBALL_NAME="$(node -e "const p=require(process.argv[1]); if(p.length!==1) process.exit(1); process.stdout.write(p[0].filename)" "$RUNNER_TEMP/hyperframes-pack.json")"
+          TARBALL="$ARTIFACT_DIR/$TARBALL_NAME"
+          test -s "$TARBALL"
+
+          node --input-type=module - "$TARBALL" "$RELEASE_VERSION" "$RELEASE_TAG" "$FORK_REPOSITORY" "$RELEASE_COMMIT" <<'NODE'
+          import assert from "node:assert/strict";
+          import { execFileSync } from "node:child_process";
+          const [tarball, version, tag, repository, commit] = process.argv.slice(2);
+          const manifest = JSON.parse(execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" }));
+          assert.equal(manifest.name, "hyperframes");
+          assert.equal(manifest.version, version);
+          assert.equal(manifest.gitHead, commit);
+          assert.deepEqual(manifest.hyperframesForkRelease, { repository, tag, commit });
+          NODE
+
+          echo "path=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "name=$TARBALL_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test packed CLI identity
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm install --global --prefix "$RUNNER_TEMP/hyperframes-global" "${{ steps.artifact.outputs.path }}"
+          ACTUAL_VERSION="$("$RUNNER_TEMP/hyperframes-global/bin/hyperframes" --version)"
+          if [ "$ACTUAL_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "::error::Packed CLI reports $ACTUAL_VERSION; expected $RELEASE_VERSION"
+            exit 1
+          fi
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTIFACT_PATH: ${{ steps.artifact.outputs.path }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --repo "$FORK_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$FORK_REPOSITORY" \
+              --verify-tag \
+              --title "HyperFrames $RELEASE_VERSION (gitci fork)" \
+              --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" "$ARTIFACT_PATH" \
+            --repo "$FORK_REPOSITORY" \
+            --clobber
